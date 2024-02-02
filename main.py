@@ -1,6 +1,7 @@
 # https://docs.poliastro.space/en/stable/examples/Generating%20orbit%20groundtracks.html
 
 import datetime
+import numpy as np
 from matplotlib import pyplot as plt
 
 # Useful for defining quantities
@@ -56,10 +57,33 @@ def lintime(start_time, end_time, interval_minutes):
     return times
 
 
+def haversine_grid(lat, lon, lats, lons):
+    # Radius of the Earth in kilometers
+    R = 6371.0
+
+    # Difference in coordinates
+    dlat = lats - lat
+    dlon = lons - lon
+
+    # Haversine formula
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat) * np.cos(lats) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+
+    # Total distance in kilometers
+    distance = R * c
+
+    return distance.T
+
+
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
 
     lat_list, lon_list = [], []
+
+    lat_vec = np.radians(np.arange(-60, 60, 1))
+    lon_vec = np.radians(np.arange(-180, 180, 1))
+    lat_grid, lon_grid = np.meshgrid(lat_vec, lon_vec)
+
     start = "2013-03-18T10:30:00"
     end = "2024-03-18T13:30:00"
     interval = 150
@@ -70,11 +94,18 @@ if __name__ == '__main__':
     for t in time_list:
 
         lat, lon, _ = prop_and_calc(orb, t)
-        lat_list.append(lat)
-        lon_list.append(lon)
+        lat_list.append(np.degrees(lat))
+        lon_list.append(np.degrees(lon))
+
+        dist = haversine_grid(lat, lon, lat_grid, lon_grid)
+
+        # plt.imshow(dist, extent=(-180, 180, 60, -60))
+        # plt.scatter(np.degrees(lon), np.degrees(lat))
+        # plt.show()
 
 
-    plt.scatter(lat_list, lon_list)
+    plt.scatter(lon_list, lat_list)
+    plt.xticks(labels=lon_vec,)
     plt.show()
 
 

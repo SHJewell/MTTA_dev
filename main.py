@@ -3,6 +3,7 @@
 import datetime
 import numpy as np
 from matplotlib import pyplot as plt
+import logging
 
 # Useful for defining quantities
 from astropy import units as u
@@ -22,6 +23,10 @@ from poliastro.core.spheroid_location import cartesian_to_ellipsoidal
 from poliastro.bodies import Earth
 from poliastro.twobody.sampling import EpochsArray
 
+logger = logging.getLogger()
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+logger.addHandler(ch)
 
 
 def def_iss_orb():
@@ -154,7 +159,9 @@ def propagate_orbit(orb, start_t, end_t):
 
     #gt = GroundtrackPlotter()
     t_span = time_range(
-        Time(start, format="isot", scale="utc"), periods=interval, end=Time(end, format="isot", scale="utc")
+        Time(start_t.strftime("%Y-%m-%dT%H:%M:%S"), format="isot", scale="utc"),
+             periods=interval,
+             end=Time(end_t.strftime("%Y-%m-%dT%H:%M:%S"), format="isot", scale="utc")
     )
 
     t_deltas = t_span - orb.epoch
@@ -182,40 +189,83 @@ def is_sat_over_target(sat_coords, global_coords, max_off_zenith):
 def gen_coord_grid(north_max, south_max, dlat, dlon):
 
     # generate earth coords
-    lat_list, lon_list = [], []
-
     lat_vec = np.arange(south_max, north_max, dlat)
     lon_vec = np.arange(-180, 180, dlon)
     lat_grid, lon_grid = np.meshgrid(lat_vec, lon_vec)
 
     return lat_grid, lon_grid
 
+
+def calc_MTTA(orbits, time_steps, grid, max_off_zenith):
+
+    logging.debug("Starting run")
+
+    # active_points = np.ones_like(grid[0]) * True
+    MTTA = np.zeros_like(grid[0])
+    number_access = np.zeros_like(grid[0])
+    # new_access = np.ones_like(grid[0]) * False
+    last_access = np.ones_like(grid[0]) * False
+
+    lat, lon = propagate_orbit(orbits, time_steps[0], time_steps[-1])
+
+    in_range_grid_n0 = is_sat_over_target((lat[0][0].value, lon[0].value, altitude),
+                                       (lat_grid, lon_grid),
+                                       max_off_zenith)
+
+    for n, t in enumerate(time_steps):
+
+        if n % 500 == 0:
+            logging.info(f"{n} / {len(time_steps)} step complete")
+
+        in_range_grid_n1 = is_sat_over_target((lat[0][n].value, lon[n].value, altitude),
+                                           (lat_grid, lon_grid),
+                                           max_off_zenith)
+
+        new_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n1
+        number_access[new_access_points] += 1
+
+        if np.all(number_access[new_access_points] <= 1):
+            last_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n0
+            last_access[last_access_points] = t
+            continue
+
+        valid_access = new_access_points & last_access
+
+        MTTA[valid_access] += (t - last_access[valid_access]) / (number_access[valid_access] + 1)
+
+        last_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n0
+        last_access[last_access_points] = t
+
+        in_range_grid_n0 = in_range_grid_n1
+
+    logger.info("MTTA run complete")
+
+    return MTTA
+
+
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
 
-
-
     lat_grid, lon_grid = gen_coord_grid(60, -60, 1, 1)
+    altitude = 525
+    max_off_zenith = 30
 
     # generate time
     start = "2025-01-01T00:00:00"
     end = "2025-01-02T00:00:00"
     interval = 24*60
-    time_list = lintime(start, end, interval)
-
+    time_list = lintime(start, end, interval) # DOESN'T WORK
 
     # define orbit
     orb = def_xleo_orb()
 
-    lat, lon = propagate_orbit(orb, start, end)
+    MTTA = calc_MTTA(orb, time_list, (lat_grid, lon_grid), max_off_zenith)
 
-    in_range_grid = is_sat_over_target((lat[0][0].value, lon[0].value, 525), (lat_grid, lon_grid), 30)
+    # plt.imshow(in_range_grid)
 
-    plt.imshow(in_range_grid)
-
-    #plt.scatter(lon, lat)
-    #plt.xticks(labels=lon_vec,)
-    plt.show()
+    # plt.scatter(lon, lat)
+    # plt.xticks(labels=lon_vec,)
+    # plt.show()
 
 
 

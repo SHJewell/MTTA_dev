@@ -4,6 +4,7 @@ import datetime
 import numpy as np
 from matplotlib import pyplot as plt
 import logging
+import sys
 
 # Useful for defining quantities
 from astropy import units as u
@@ -23,10 +24,19 @@ from poliastro.core.spheroid_location import cartesian_to_ellipsoidal
 from poliastro.bodies import Earth
 from poliastro.twobody.sampling import EpochsArray
 
-logger = logging.getLogger()
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-logger.addHandler(ch)
+# logger = logging.getLogger()
+# ch = logging.StreamHandler(sys.stdout)
+# ch.setLevel(logging.DEBUG)
+# logger.addHandler(ch)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("debug.log"),
+        logging.StreamHandler()
+    ]
+)
 
 
 def def_iss_orb():
@@ -56,7 +66,7 @@ def prop_and_calc(orb, dt):
     #return cartesian_to_ellipsoidal(r[0].to(u.m).value, r[1].to(u.m).value, r[2].to(u.m).value)
 
 
-def lintime(start_time, end_time, interval_minutes):
+def lintime(start_time, end_time, interval_seconds):
     # Convert start and end times to datetime objects if they are not already
     if isinstance(start_time, str):
         start_time = datetime.datetime.fromisoformat(start_time)
@@ -65,28 +75,29 @@ def lintime(start_time, end_time, interval_minutes):
 
     # Calculate the number of intervals
     delta = end_time - start_time
-    total_intervals = int(delta.total_seconds() / (interval_minutes * 60))
+    total_intervals = int(delta.total_seconds() / (interval_seconds))
 
     # Generate the list of times
-    times = [start_time + datetime.timedelta(minutes=interval_minutes) * i for i in range(total_intervals + 1)]
+    times = [start_time + datetime.timedelta(seconds=interval_seconds) * i for i in range(total_intervals + 1)]
+
 
     return times
 
 
-# def haversine_grid(lat, lon, lats, lons):
-#
-#     # Difference in coordinates
-#     dlat = np.radians(lats - lat)
-#     dlon = np.radians(lons - lon)
-#
-#     # Haversine formula
-#     a = np.sin(dlat / 2) ** 2 + (np.cos(lat) * np.cos(lats) * np.sin(dlon / 2) ** 2)
-#     c = np.arcsin(np.sqrt(a))
-#
-#     # Total distance in kilometers
-#     distance = 2 * (Earth.R.value / 1000) * c
-#
-#     return distance.T
+def haversine_grid(lat, lon, lats, lons):
+
+    # Difference in coordinates
+    dlat = np.radians(lats - lat)
+    dlon = np.radians(lons - lon)
+
+    # Haversine formula
+    a = np.sin(dlat / 2) ** 2 + (np.cos(lat) * np.cos(lats) * np.sin(dlon / 2) ** 2)
+    c = np.arcsin(np.sqrt(a))
+
+    # Total distance in kilometers
+    distance = 2 * (Earth.R.value / 1000) * c
+
+    return distance.T
 
 
 def spherical_cosines(lat, lon, lats, lons):
@@ -120,8 +131,8 @@ def _get_raw_coords(orb, t_deltas):
     rr, vv = ephem.rv()
     raw_xyz = CartesianRepresentation(
         rr,
-        xyz_axis=-1,
-        differentials=CartesianDifferential(vv, xyz_axis=-1),
+        xyz_axis=1,
+        differentials=CartesianDifferential(vv, xyz_axis=1),
     )
     raw_epochs = ephem.epochs
 
@@ -155,9 +166,9 @@ def _from_raw_to_ITRS(raw_xyz, raw_obstime):
     return itrs_xyz
 
 
-def propagate_orbit(orb, start_t, end_t):
+def propagate_orbit(orb, start_t, end_t, interval):
 
-    #gt = GroundtrackPlotter()
+    # from GroundtrackPlotter()
     t_span = time_range(
         Time(start_t.strftime("%Y-%m-%dT%H:%M:%S"), format="isot", scale="utc"),
              periods=interval,
@@ -173,7 +184,7 @@ def propagate_orbit(orb, start_t, end_t):
     lat = itrs_latlon.lat.to(u.deg),
     lon = itrs_latlon.lon.to(u.deg)
 
-    return lat, lon
+    return lat[0].value, lon.value
 
 
 def is_sat_over_target(sat_coords, global_coords, max_off_zenith):
@@ -198,47 +209,71 @@ def gen_coord_grid(north_max, south_max, dlat, dlon):
 
 def calc_MTTA(orbits, time_steps, grid, max_off_zenith):
 
+    #logger.debug("Starting run")
     logging.debug("Starting run")
+
+    secs = np.linspace(0, (time_steps[-1] - time_steps[0]).total_seconds(), len(time_steps))
 
     # active_points = np.ones_like(grid[0]) * True
     MTTA = np.zeros_like(grid[0])
+    last_orbit_access = -1 * np.ones_like(grid[0])
     number_access = np.zeros_like(grid[0])
-    # new_access = np.ones_like(grid[0]) * False
+    new_access = np.ones_like(grid[0]) * False
     last_access = np.ones_like(grid[0]) * False
 
-    lat, lon = propagate_orbit(orbits, time_steps[0], time_steps[-1])
+    lat, lon = propagate_orbit(orbits, time_steps[0], time_steps[-1], len(time_steps))
 
-    in_range_grid_n0 = is_sat_over_target((lat[0][0].value, lon[0].value, altitude),
-                                       (lat_grid, lon_grid),
-                                       max_off_zenith)
+    # plt.scatter(lon, lat)
+    # plt.show()
+
+    # in_range_grid_n0 = is_sat_over_target((lat[0], lon[0], altitude),
+    #                                    (lat_grid, lon_grid),
+    #                                    max_off_zenith)
+
+    lon0 = lat[0]
+    orbit_N = 0
 
     for n, t in enumerate(time_steps):
 
+        # may cause timing issues along the International Date Line
+        if lon[n] < lon[0]:
+            orbit_N += 1
+            # logger.info(f"New orbit: {orbit_N}")
+            # logging.debug(f"New orbit: {orbit_N}")
+
+        lon0 = lon[n]
+
         if n % 500 == 0:
+            # logger.info(f"{t.strftime('%Y-%m-%dT%H:%M:%S')}")
+            # logger.info(f"{n} / {len(time_steps)} step complete")
+            logging.info(f"{t.strftime('%Y-%m-%dT%H:%M:%S')}")
             logging.info(f"{n} / {len(time_steps)} step complete")
 
-        in_range_grid_n1 = is_sat_over_target((lat[0][n].value, lon[n].value, altitude),
+        in_range_grid_n1 = is_sat_over_target((lat[n], lon[n], altitude),
                                            (lat_grid, lon_grid),
                                            max_off_zenith)
 
-        new_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n1
-        number_access[new_access_points] += 1
+        # new_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n1
+        new_access = in_range_grid_n1 & (last_orbit_access != orbit_N)
+        last_orbit_access[new_access] = orbit_N
 
-        if np.all(number_access[new_access_points] <= 1):
-            last_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n0
-            last_access[last_access_points] = t
-            continue
+        # if np.all(number_access[new_access_points] <= 1):
+        #     last_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n0
+        #     last_access[last_access_points] = secs[n]
+        #     continue
 
-        valid_access = new_access_points & last_access
+        #valid_access = new_access  last_orbit_access
+        number_access[new_access] += 1
 
-        MTTA[valid_access] += (t - last_access[valid_access]) / (number_access[valid_access] + 1)
+        if np.all(number_access[new_access] > 1):
+            MTTA[new_access] = (secs[n] - last_access[new_access]) / (number_access[new_access] + 1)
 
-        last_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n0
-        last_access[last_access_points] = t
+        # last_access_points = (in_range_grid_n0 != in_range_grid_n1) & in_range_grid_n0
+        # last_access[last_access_points] = secs[n]
 
-        in_range_grid_n0 = in_range_grid_n1
+        # in_range_grid_n0 = in_range_grid_n1
 
-    logger.info("MTTA run complete")
+    logging.info("MTTA run complete")
 
     return MTTA
 
@@ -252,14 +287,37 @@ if __name__ == '__main__':
 
     # generate time
     start = "2025-01-01T00:00:00"
-    end = "2025-01-02T00:00:00"
-    interval = 24*60
-    time_list = lintime(start, end, interval) # DOESN'T WORK
+    end = "2025-02-01T00:00:00"
+    #interval = 24*60
+    interval = 60
+    time_list = lintime(start, end, interval)
 
     # define orbit
     orb = def_xleo_orb()
 
     MTTA = calc_MTTA(orb, time_list, (lat_grid, lon_grid), max_off_zenith)
+
+    MTTA_by_lat = np.mean(MTTA, axis=0) / 3600
+    to_file = np.array([lat_grid[0], MTTA_by_lat])
+
+    print(MTTA_by_lat)
+
+    np.savetxt("MTTA.csv", to_file.T, delimiter=",", fmt="%d.2", header="latitude MTTA(hours)")
+
+    plt.imshow(MTTA.T / 3600)
+    plt.colorbar()
+    plt.title("MTTA in Hours, 1 Month, 1 minute increments")
+    plt.ylabel("Latitude (Degrees - 60)")
+    plt.xlabel("Longitude (Degrees - 180)")
+    plt.show()
+
+    plt.figure()
+    plt.plot(lat_grid[0], MTTA_by_lat)
+    plt.title("MTTA in Hours, 1 Month, 1 minute increments")
+    plt.ylabel("MTTA (Hours)")
+    plt.xlabel("Latitude (Degrees)")
+    plt.show()
+
 
     # plt.imshow(in_range_grid)
 

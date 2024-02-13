@@ -243,7 +243,7 @@ def calc_MTTA(orbits, time_steps, grid, max_off_zenith):
 
         lon0 = lon[n]
 
-        if n % 500 == 0:
+        if n % 1000 == 0:
             # logger.info(f"{t.strftime('%Y-%m-%dT%H:%M:%S')}")
             # logger.info(f"{n} / {len(time_steps)} step complete")
             logging.info(f"{t.strftime('%Y-%m-%dT%H:%M:%S')}")
@@ -287,7 +287,7 @@ if __name__ == '__main__':
 
     # generate time
     start = "2025-01-01T00:00:00"
-    end = "2025-02-01T00:00:00"
+    end = "2026-01-01T00:00:00"
     #interval = 24*60
     interval = 60
     time_list = lintime(start, end, interval)
@@ -300,9 +300,19 @@ if __name__ == '__main__':
     MTTA_by_lat = np.mean(MTTA, axis=0) / 3600
     to_file = np.array([lat_grid[0], MTTA_by_lat])
 
-    print(MTTA_by_lat)
+    # print(MTTA_by_lat)
+
+    total_MTTA = np.array([lat_grid[0], MTTA])
 
     np.savetxt("MTTA.csv", to_file.T, delimiter=",", fmt="%d.2", header="latitude MTTA(hours)")
+
+    import pandas as pd
+
+    mtta_df = pd.DataFrame(MTTA.T)
+    mtta_df.index = lat_grid[0][:]
+    mtta_df.columns = lon_grid[:, 0]
+    mtta_df.to_csv("raw_MTTA.csv")
+
 
     plt.imshow(MTTA.T / 3600)
     plt.colorbar()
